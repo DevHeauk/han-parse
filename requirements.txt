@@ -1,0 +1,5 @@
+pyhwp>=0.1b12
+olefile>=0.46
+Flask>=2.3.0
+Werkzeug>=2.3.0
+
