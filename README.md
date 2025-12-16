@@ -147,6 +147,17 @@ merge_tables("tables1.json", "tables2.json", "merged.json")
 ]
 ```
 
+## HWP vs HWPX 파일 형식
+
+| 구분 | HWP | HWPX |
+|------|-----|------|
+| **형식** | OLE 컴파운드 (바이너리) | ZIP + XML (OWPML) |
+| **확장자** | `.hwp` | `.hwpx` |
+| **개방성** | 비공개 포맷 | 개방형 표준 |
+| **읽기** | ✅ pyhwp 사용 | ✅ 표준 라이브러리 |
+| **쓰기** | ❌ 불가능 | ✅ 가능 |
+| **호환성** | 한컴오피스 전용 | 한컴오피스 2014+ |
+
 ## 주의사항
 
 1. **표 파싱 제한**: 한글 파일의 복잡한 구조로 인해 일부 표는 완벽하게 파싱되지 않을 수 있습니다.
@@ -158,11 +169,40 @@ merge_tables("tables1.json", "tables2.json", "merged.json")
 
 3. **템플릿 사용**: 재구성 시 템플릿 한글 파일을 사용하면 더 나은 결과를 얻을 수 있습니다.
 
-## 의존성
+## 주요 사용 라이브러리
 
-- `pyhwp>=0.1b12`: 한글 파일 파싱 라이브러리
-- `olefile>=0.46`: OLE 파일 형식 처리
-- Python 표준 라이브러리: `json`, `csv` (별도 설치 불필요)
+### 🔧 HWP 파일 처리 (읽기 전용)
+
+| 라이브러리 | 버전 | 용도 |
+|-----------|------|------|
+| **[pyhwp](https://github.com/mete0r/pyhwp)** | >=0.1b12 | HWP 파일 파싱 (텍스트, 표 추출) |
+| **[olefile](https://github.com/decalage2/olefile)** | >=0.46 | OLE 컴파운드 파일 구조 처리 |
+
+> ⚠️ `pyhwp`는 **읽기 전용** 라이브러리입니다. HWP 파일 수정/생성은 지원하지 않습니다.
+
+### 📦 HWPX 파일 처리 (읽기/쓰기)
+
+| 라이브러리 | 용도 |
+|-----------|------|
+| **zipfile** (표준) | HWPX(ZIP 압축) 파일 압축 해제/생성 |
+| **xml.etree.ElementTree** (표준) | OWPML(XML) 파싱 |
+| **re** (표준) | XML 수정 시 네임스페이스 보존을 위한 정규식 처리 |
+
+> ✅ HWPX는 개방형 XML 포맷(OWPML)으로, 표준 라이브러리만으로 읽기/쓰기가 가능합니다.
+
+### 🌐 웹 서버
+
+| 라이브러리 | 버전 | 용도 |
+|-----------|------|------|
+| **[Flask](https://flask.palletsprojects.com/)** | >=2.3.0 | 웹 프레임워크 |
+| **[Werkzeug](https://werkzeug.palletsprojects.com/)** | >=2.3.0 | WSGI 유틸리티 (파일 업로드 등) |
+
+### 📚 Python 표준 라이브러리
+
+- `json` - 표 데이터 JSON 저장/로드
+- `csv` - 표 데이터 CSV 저장/로드  
+- `tempfile` - 임시 파일 처리
+- `os`, `shutil` - 파일 시스템 조작
 
 ## 예제 워크플로우
 
