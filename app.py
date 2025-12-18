@@ -14,7 +14,7 @@ from flask import Flask, request, jsonify, render_template, send_file
 from werkzeug.utils import secure_filename
 from han_parser import parse_hwp, parse_tables, save_tables_to_json
 from table_reconstructor import create_hwp_from_tables_json, edit_table_data
-from hwpx_parser import is_hwpx_file, parse_hwpx, save_hwpx_with_tables
+from hwpx_parser import is_hwpx_file, parse_hwpx, save_hwpx_with_tables, save_hwpx_with_tables_lxml
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB 제한
@@ -460,8 +460,8 @@ def download_hwpx(session_id):
         # 출력 파일 경로
         output_path = os.path.join(app.config['TEMP_FOLDER'], f'{session_id}_edited.hwpx')
         
-        # HWPX 파일 생성
-        success = save_hwpx_with_tables(original_path, tables, output_path)
+        # HWPX 파일 생성 (lxml 버전 사용, 없으면 정규식 버전으로 자동 fallback)
+        success = save_hwpx_with_tables_lxml(original_path, tables, output_path)
         
         if not success:
             return jsonify({'error': 'HWPX 파일 생성에 실패했습니다'}), 500
