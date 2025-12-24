@@ -3,6 +3,10 @@
 """
 한글 파일(HWP) 파싱 모듈
 표 파싱 및 재구성 기능 포함
+- 단락 구조 보존
+- 글자 스타일 추출 (굵게, 기울임, 밑줄 등)
+- 이미지 추출
+- 글머리 기호/번호 매기기
 """
 
 import sys
@@ -11,6 +15,223 @@ import json
 import csv
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+
+
+def parse_hwp_full(file_path: str) -> Dict[str, Any]:
+    """
+    한글 파일을 완전히 파싱하여 구조화된 데이터로 반환합니다.
+    단락, 스타일, 표, 이미지 등 모든 정보를 포함합니다.
+    
+    Args:
+        file_path: 한글 파일 경로
+        
+    Returns:
+        Dict: 파싱된 문서 데이터
+        {
+            'paragraphs': [...],  # 단락 리스트
+            'tables': [...],      # 표 리스트
+            'images': [...],      # 이미지 리스트
+            'styles': {...},      # 스타일 정보
+            'text': str,          # 전체 텍스트
+            'metadata': {...}     # 문서 메타데이터
+        }
+    """
+    result = {
+        'paragraphs': [],
+        'tables': [],
+        'images': [],
+        'styles': {},
+        'text': '',
+        'metadata': {},
+        'success': False,
+        'error': None
+    }
+    
+    try:
+        from hwp5.xmlmodel import Hwp5File
+        
+        hwp = Hwp5File(file_path)
+        all_text = []
+        para_idx = 0
+        
+        # BodyText의 sections 순회
+        if hasattr(hwp, 'bodytext'):
+            bodytext = hwp.bodytext
+            sections = bodytext.sections
+            
+            for section_idx, section in enumerate(sections):
+                current_paragraph = None
+                current_runs = []
+                in_table = False
+                
+                for model in section.models():
+                    if isinstance(model, dict):
+                        model_type = str(model.get('type', ''))
+                        content = model.get('content', {})
+                        
+                        # 단락 시작
+                        if 'Paragraph' in model_type and 'Para' not in model_type[-4:]:
+                            # 이전 단락 저장
+                            if current_paragraph and current_runs:
+                                current_paragraph['runs'] = current_runs
+                                if not in_table:
+                                    result['paragraphs'].append(current_paragraph)
+                                current_runs = []
+                            
+                            # 새 단락 시작
+                            current_paragraph = {
+                                'id': para_idx,
+                                'section': section_idx,
+                                'runs': [],
+                                'style': {},
+                                'alignment': 'left',
+                                'indent': 0,
+                                'bullet': None,
+                                'numbering': None
+                            }
+                            para_idx += 1
+                        
+                        # 단락 스타일 (ParaShape)
+                        elif 'ParaShape' in model_type:
+                            if current_paragraph:
+                                # 정렬
+                                align = content.get('align', 0)
+                                align_map = {0: 'justify', 1: 'left', 2: 'right', 3: 'center'}
+                                current_paragraph['alignment'] = align_map.get(align, 'left')
+                                
+                                # 들여쓰기 (HWPUNIT: 1/7200 inch)
+                                indent = content.get('indent', 0)
+                                current_paragraph['indent'] = indent / 7200 * 25.4  # mm로 변환
+                        
+                        # 글자 스타일 (CharShape)
+                        elif 'CharShape' in model_type:
+                            style_info = {
+                                'bold': bool(content.get('bold', 0)),
+                                'italic': bool(content.get('italic', 0)),
+                                'underline': content.get('underline', 0) > 0,
+                                'strikeout': bool(content.get('strikeout', 0)),
+                                'font_size': content.get('basesize', 1000) / 100,  # pt
+                                'font_name': content.get('face_name', ''),
+                                'color': _parse_color(content.get('text_color', 0)),
+                                'bg_color': _parse_color(content.get('shade_color', 0xFFFFFFFF))
+                            }
+                            # 스타일 ID로 저장
+                            style_id = len(result['styles'])
+                            result['styles'][style_id] = style_info
+                        
+                        # 텍스트 내용 (ParaText)
+                        elif 'ParaText' in model_type:
+                            chunks = content.get('chunks', [])
+                            for chunk in chunks:
+                                if isinstance(chunk, tuple) and len(chunk) >= 2:
+                                    chunk_content = chunk[1]
+                                    if isinstance(chunk_content, str):
+                                        run = {
+                                            'text': chunk_content,
+                                            'style_id': len(result['styles']) - 1 if result['styles'] else 0
+                                        }
+                                        current_runs.append(run)
+                                        all_text.append(chunk_content)
+                            all_text.append('\n')
+                        
+                        # 글머리 기호/번호
+                        elif 'Numbering' in model_type or 'Bullet' in model_type:
+                            if current_paragraph:
+                                if 'Bullet' in model_type:
+                                    current_paragraph['bullet'] = content.get('char', '•')
+                                else:
+                                    current_paragraph['numbering'] = {
+                                        'type': content.get('type', 'DIGIT'),
+                                        'start': content.get('start', 1)
+                                    }
+                        
+                        # 표 시작
+                        elif 'TableControl' in model_type:
+                            in_table = True
+                        
+                        # 이미지/그림
+                        elif 'ShapePicture' in model_type or 'Picture' in model_type:
+                            image_info = {
+                                'id': len(result['images']),
+                                'section': section_idx,
+                                'width': content.get('width', 0) / 7200 * 25.4,  # mm
+                                'height': content.get('height', 0) / 7200 * 25.4,
+                                'bin_item': content.get('binitem', None)
+                            }
+                            result['images'].append(image_info)
+                
+                # 마지막 단락 저장
+                if current_paragraph and current_runs:
+                    current_paragraph['runs'] = current_runs
+                    if not in_table:
+                        result['paragraphs'].append(current_paragraph)
+        
+        # 표 파싱 (기존 함수 사용)
+        result['tables'] = parse_tables(file_path)
+        result['text'] = ''.join(all_text)
+        result['success'] = True
+        
+        # 이미지 추출 시도
+        result['images'] = _extract_images_from_hwp(hwp, file_path)
+        
+    except ImportError as e:
+        result['error'] = f"hwp5 라이브러리가 설치되지 않았습니다: {e}"
+    except Exception as e:
+        result['error'] = str(e)
+        import traceback
+        traceback.print_exc()
+    
+    return result
+
+
+def _parse_color(color_value: int) -> str:
+    """HWP 색상값을 CSS 색상으로 변환"""
+    if color_value == 0xFFFFFFFF:
+        return 'transparent'
+    r = color_value & 0xFF
+    g = (color_value >> 8) & 0xFF
+    b = (color_value >> 16) & 0xFF
+    return f'#{r:02x}{g:02x}{b:02x}'
+
+
+def _extract_images_from_hwp(hwp, file_path: str) -> List[Dict[str, Any]]:
+    """HWP 파일에서 이미지 추출"""
+    images = []
+    
+    try:
+        # BinData 스트림에서 이미지 추출
+        if hasattr(hwp, 'bindata'):
+            bindata = hwp.bindata
+            for item_name in bindata.itemnames():
+                try:
+                    item = bindata.item(item_name)
+                    # 이미지 데이터 추출
+                    if hasattr(item, 'open'):
+                        with item.open() as f:
+                            data = f.read()
+                            # 이미지 타입 감지
+                            img_type = 'unknown'
+                            if data[:8] == b'\x89PNG\r\n\x1a\n':
+                                img_type = 'png'
+                            elif data[:2] == b'\xff\xd8':
+                                img_type = 'jpeg'
+                            elif data[:4] == b'GIF8':
+                                img_type = 'gif'
+                            elif data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+                                img_type = 'webp'
+                            
+                            images.append({
+                                'name': item_name,
+                                'type': img_type,
+                                'size': len(data),
+                                'data_base64': None  # 필요시 base64 인코딩 가능
+                            })
+                except:
+                    pass
+    except Exception as e:
+        print(f"이미지 추출 오류: {e}")
+    
+    return images
 
 
 def parse_hwp(file_path):
