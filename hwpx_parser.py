@@ -704,30 +704,511 @@ def save_hwpx_with_tables_lxml(original_path: str, tables_data: List[Dict[str, A
         return save_hwpx_with_tables(original_path, tables_data, output_path)
 
 
+def convert_hwp_to_hwpx(hwp_path: str, output_path: str, template_hwpx_path: Optional[str] = None, 
+                         text: Optional[str] = None, tables: Optional[List[Dict[str, Any]]] = None,
+                         paragraphs: Optional[List[Dict[str, Any]]] = None,
+                         images: Optional[List[Dict[str, Any]]] = None) -> bool:
+    """
+    HWP 파일을 파싱하여 HWPX 파일로 변환합니다.
+    단락 구조, 스타일, 표, 이미지 등을 최대한 보존합니다.
+    
+    Args:
+        hwp_path: HWP 파일 경로
+        output_path: 생성할 HWPX 파일 경로
+        template_hwpx_path: (선택) 템플릿 HWPX 파일 경로 (없으면 기본 구조 생성)
+        text: (선택) 이미 파싱된 텍스트 (없으면 hwp_path에서 파싱)
+        tables: (선택) 이미 파싱된 표 데이터 (없으면 hwp_path에서 파싱)
+        paragraphs: (선택) 단락 구조 데이터
+        images: (선택) 이미지 데이터
+        
+    Returns:
+        성공 여부
+    """
+    try:
+        # 전체 파싱 시도 (단락 구조 포함)
+        if paragraphs is None and os.path.exists(hwp_path):
+            try:
+                from han_parser import parse_hwp_full
+                print(f"HWP 파일 전체 파싱 중: {hwp_path}")
+                full_result = parse_hwp_full(hwp_path)
+                
+                if full_result.get('success'):
+                    paragraphs = full_result.get('paragraphs', [])
+                    if text is None:
+                        text = full_result.get('text', '')
+                    if tables is None:
+                        tables = full_result.get('tables', [])
+                    if images is None:
+                        images = full_result.get('images', [])
+                    
+                    print(f"단락 개수: {len(paragraphs)}")
+                    print(f"이미지 개수: {len(images) if images else 0}")
+            except ImportError:
+                pass
+        
+        # 기본 파싱 (단락 구조 없이)
+        if text is None or tables is None:
+            from han_parser import parse_hwp, parse_tables
+            
+            print(f"HWP 파일 기본 파싱 중: {hwp_path}")
+            if text is None:
+                text = parse_hwp(hwp_path)
+            if tables is None:
+                tables = parse_tables(hwp_path)
+        
+        print(f"텍스트 길이: {len(text) if text else 0}")
+        print(f"표 개수: {len(tables) if tables else 0}")
+        
+        # 템플릿 HWPX 파일 사용 또는 기본 구조 생성
+        if template_hwpx_path and os.path.exists(template_hwpx_path):
+            return _convert_with_template(template_hwpx_path, text or '', tables or [], output_path, 
+                                          paragraphs=paragraphs, images=images)
+        else:
+            return _create_hwpx_from_scratch(text or '', tables or [], output_path,
+                                             paragraphs=paragraphs, images=images)
+            
+    except Exception as e:
+        print(f"HWP → HWPX 변환 오류: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def _convert_with_template(template_path: str, text: str, tables: List[Dict[str, Any]], output_path: str,
+                            paragraphs: List[Dict[str, Any]] = None, images: List[Dict[str, Any]] = None) -> bool:
+    """템플릿 HWPX 파일을 사용하여 변환 (단락 구조 지원)"""
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # 템플릿 압축 해제
+            with zipfile.ZipFile(template_path, 'r') as zf:
+                zf.extractall(temp_dir)
+            
+            # section0.xml 수정
+            section_file = os.path.join(temp_dir, 'Contents', 'section0.xml')
+            if not os.path.exists(section_file):
+                # section 파일 찾기
+                for root, dirs, files in os.walk(temp_dir):
+                    for file in files:
+                        if 'section' in file.lower() and file.endswith('.xml'):
+                            section_file = os.path.join(root, file)
+                            break
+            
+            if os.path.exists(section_file):
+                # lxml 사용 가능하면 lxml로, 아니면 기본 방식으로
+                if LXML_AVAILABLE:
+                    _create_section_xml_lxml(section_file, text, tables, paragraphs=paragraphs)
+                else:
+                    _create_section_xml_basic(section_file, text, tables, paragraphs=paragraphs)
+            
+            # 다시 ZIP으로 압축
+            with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for root, dirs, files in os.walk(temp_dir):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, temp_dir)
+                        zf.write(file_path, arcname)
+            
+            print(f"HWPX 파일 생성 완료: {output_path}")
+            return True
+            
+    except Exception as e:
+        print(f"템플릿 변환 오류: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def _create_hwpx_from_scratch(text: str, tables: List[Dict[str, Any]], output_path: str,
+                               paragraphs: List[Dict[str, Any]] = None, images: List[Dict[str, Any]] = None) -> bool:
+    """기본 HWPX 구조를 처음부터 생성 (단락 구조 지원)"""
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # 기본 디렉토리 구조 생성
+            os.makedirs(os.path.join(temp_dir, 'Contents'), exist_ok=True)
+            os.makedirs(os.path.join(temp_dir, 'META-INF'), exist_ok=True)
+            
+            # 이미지가 있으면 BinData 폴더 생성
+            if images:
+                os.makedirs(os.path.join(temp_dir, 'BinData'), exist_ok=True)
+            
+            # mimetype 파일
+            with open(os.path.join(temp_dir, 'mimetype'), 'w', encoding='utf-8') as f:
+                f.write('application/vnd.hancom.hwpml+zip')
+            
+            # version.xml
+            with open(os.path.join(temp_dir, 'version.xml'), 'w', encoding='utf-8') as f:
+                f.write('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n')
+                f.write('<hh:version xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">\n')
+                f.write('  <hh:versionNumber>5.0.0.0</hh:versionNumber>\n')
+                f.write('</hh:version>\n')
+            
+            # settings.xml (최소한의 구조)
+            with open(os.path.join(temp_dir, 'settings.xml'), 'w', encoding='utf-8') as f:
+                f.write('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n')
+                f.write('<hh:settings xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"/>\n')
+            
+            # META-INF/container.xml
+            container_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="Contents/content.hpf" media-type="application/vnd.hancom.hwpml+xml"/>
+  </rootfiles>
+</container>'''
+            with open(os.path.join(temp_dir, 'META-INF', 'container.xml'), 'w', encoding='utf-8') as f:
+                f.write(container_xml)
+            
+            # META-INF/manifest.xml
+            manifest_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0">
+  <manifest:file-entry manifest:full-path="Contents/content.hpf" manifest:media-type="application/vnd.hancom.hwpml+xml"/>
+  <manifest:file-entry manifest:full-path="Contents/header.xml" manifest:media-type="application/vnd.hancom.hwpml+xml"/>
+  <manifest:file-entry manifest:full-path="Contents/section0.xml" manifest:media-type="application/vnd.hancom.hwpml+xml"/>
+</manifest:manifest>'''
+            with open(os.path.join(temp_dir, 'META-INF', 'manifest.xml'), 'w', encoding='utf-8') as f:
+                f.write(manifest_xml)
+            
+            # Contents/content.hpf
+            content_hpf = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<hpf:hpf xmlns:hpf="http://www.hancom.co.kr/schema/2011/hpf">
+  <hpf:head>
+    <hpf:docOption/>
+    <hpf:trackChangeConfig/>
+  </hpf:head>
+  <hpf:body>
+    <hpf:section href="section0.xml"/>
+  </hpf:body>
+</hpf:hpf>'''
+            with open(os.path.join(temp_dir, 'Contents', 'content.hpf'), 'w', encoding='utf-8') as f:
+                f.write(content_hpf)
+            
+            # Contents/header.xml - 글자 스타일 정보 포함
+            header_xml = _generate_header_xml(paragraphs)
+            with open(os.path.join(temp_dir, 'Contents', 'header.xml'), 'w', encoding='utf-8') as f:
+                f.write(header_xml)
+            
+            # Contents/section0.xml 생성
+            section_file = os.path.join(temp_dir, 'Contents', 'section0.xml')
+            if LXML_AVAILABLE:
+                _create_section_xml_lxml(section_file, text, tables, paragraphs=paragraphs)
+            else:
+                _create_section_xml_basic(section_file, text, tables, paragraphs=paragraphs)
+            
+            # ZIP으로 압축
+            with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for root, dirs, files in os.walk(temp_dir):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, temp_dir)
+                        zf.write(file_path, arcname)
+            
+            print(f"HWPX 파일 생성 완료: {output_path}")
+            return True
+            
+    except Exception as e:
+        print(f"HWPX 생성 오류: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def _generate_header_xml(paragraphs: List[Dict[str, Any]] = None) -> str:
+    """header.xml 생성 - 스타일 정보 포함"""
+    # 기본 header.xml
+    header = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+  <hh:beginNum page="1" footnote="1" endnote="1" pic="1" tbl="1" equation="1"/>
+  <hh:refList>
+    <hh:fontfaces>
+      <hh:fontface lang="HANGUL" fontCnt="1">
+        <hh:font id="0" face="함초롬바탕" type="TTF" isEmbedded="0"/>
+      </hh:fontface>
+      <hh:fontface lang="LATIN" fontCnt="1">
+        <hh:font id="0" face="함초롬바탕" type="TTF" isEmbedded="0"/>
+      </hh:fontface>
+    </hh:fontfaces>
+    <hh:charProperties itemCnt="2">
+      <hh:charPr id="0" height="1000" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="0">
+        <hh:fontRef hangul="0" latin="0"/>
+      </hh:charPr>
+      <hh:charPr id="1" height="1000" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="0" bold="1">
+        <hh:fontRef hangul="0" latin="0"/>
+      </hh:charPr>
+    </hh:charProperties>
+    <hh:paraProperties itemCnt="4">
+      <hh:paraPr id="0" align="JUSTIFY"/>
+      <hh:paraPr id="1" align="LEFT"/>
+      <hh:paraPr id="2" align="RIGHT"/>
+      <hh:paraPr id="3" align="CENTER"/>
+    </hh:paraProperties>
+  </hh:refList>
+  <hh:docOption/>
+</hh:head>'''
+    return header
+
+
+def _create_section_xml_lxml(section_file: str, text: str, tables: List[Dict[str, Any]], 
+                             paragraphs: List[Dict[str, Any]] = None):
+    """lxml을 사용하여 section XML 생성 (단락 구조 지원)"""
+    ns_map = {
+        'hp': 'http://www.hancom.co.kr/hwpml/2011/paragraph',
+        'hs': 'http://www.hancom.co.kr/hwpml/2011/section',
+        'hc': 'http://www.hancom.co.kr/hwpml/2011/core',
+    }
+    
+    HP = '{http://www.hancom.co.kr/hwpml/2011/paragraph}'
+    HS = '{http://www.hancom.co.kr/hwpml/2011/section}'
+    
+    # 루트 요소 생성
+    root = etree.Element(f'{HS}sec', nsmap=ns_map)
+    
+    # 단락 구조가 있으면 사용, 없으면 단순 텍스트 사용
+    if paragraphs:
+        for para in paragraphs:
+            para_id = str(para.get('id', hash(str(para)) % 1000000000))
+            alignment = para.get('alignment', 'left')
+            
+            # 정렬 매핑
+            align_map = {'left': '1', 'center': '3', 'right': '2', 'justify': '0'}
+            para_pr_id = align_map.get(alignment, '0')
+            
+            p = etree.SubElement(root, f'{HP}p', 
+                id=para_id,
+                paraPrIDRef=para_pr_id,
+                styleIDRef="0"
+            )
+            
+            # 글머리 기호
+            if para.get('bullet'):
+                bullet_run = etree.SubElement(p, f'{HP}run', charPrIDRef="0")
+                bullet_t = etree.SubElement(bullet_run, f'{HP}t')
+                bullet_t.text = para['bullet'] + ' '
+            
+            # 번호 매기기
+            if para.get('numbering'):
+                num_info = para['numbering']
+                num_run = etree.SubElement(p, f'{HP}run', charPrIDRef="0")
+                num_t = etree.SubElement(num_run, f'{HP}t')
+                num_t.text = f"{num_info.get('start', 1)}. "
+            
+            # runs 처리
+            runs = para.get('runs', [])
+            for run_data in runs:
+                run_text = run_data.get('text', '')
+                style_id = str(run_data.get('style_id', 0))
+                
+                run = etree.SubElement(p, f'{HP}run', charPrIDRef=style_id)
+                t = etree.SubElement(run, f'{HP}t')
+                t.text = run_text
+    elif text:
+        # 단순 텍스트 모드 - 줄바꿈 기준으로 단락 분리
+        lines = text.split('\n')
+        for idx, line in enumerate(lines):
+            if not line.strip():
+                continue
+            
+            p = etree.SubElement(root, f'{HP}p',
+                id=str(idx + 1000000000),
+                paraPrIDRef="0",
+                styleIDRef="0"
+            )
+            run = etree.SubElement(p, f'{HP}run', charPrIDRef="0")
+            t = etree.SubElement(run, f'{HP}t')
+            t.text = line
+    
+    # 표 생성 - 셀 병합(colspan, rowspan) 지원
+    for table_idx, table_data in enumerate(tables):
+        rows = table_data.get('rows', [])
+        cells_info = table_data.get('cells', [])  # 병합 정보
+        if not rows:
+            continue
+        
+        row_count = len(rows)
+        col_count = max(len(row) for row in rows) if rows else 0
+        
+        # 표 단락 컨테이너
+        p = etree.SubElement(root, f'{HP}p',
+            id=str(1000000000 + table_idx),
+            paraPrIDRef="0",
+            styleIDRef="0"
+        )
+        run = etree.SubElement(p, f'{HP}run', charPrIDRef="0")
+        
+        # 표 요소
+        tbl = etree.SubElement(run, f'{HP}tbl',
+            id=str(2000000000 + table_idx),
+            rowCnt=str(row_count),
+            colCnt=str(col_count)
+        )
+        
+        for row_idx, row_data in enumerate(rows):
+            tr = etree.SubElement(tbl, f'{HP}tr')
+            
+            for col_idx, cell_text in enumerate(row_data):
+                # 셀 병합 정보 확인
+                colspan = 1
+                rowspan = 1
+                if cells_info and row_idx < len(cells_info):
+                    row_cells = cells_info[row_idx]
+                    if col_idx < len(row_cells):
+                        cell_info = row_cells[col_idx]
+                        colspan = cell_info.get('colspan', 1)
+                        rowspan = cell_info.get('rowspan', 1)
+                
+                tc = etree.SubElement(tr, f'{HP}tc')
+                
+                # 셀 병합 정보 추가
+                if colspan > 1 or rowspan > 1:
+                    cell_span = etree.SubElement(tc, f'{HP}cellSpan',
+                        colSpan=str(colspan),
+                        rowSpan=str(rowspan)
+                    )
+                
+                # 셀 내용 (subList 구조)
+                sublist = etree.SubElement(tc, f'{HP}subList',
+                    textDirection="HORIZONTAL",
+                    lineWrap="BREAK",
+                    vertAlign="CENTER"
+                )
+                cell_p = etree.SubElement(sublist, f'{HP}p',
+                    id=str(3000000000 + table_idx * 10000 + row_idx * 100 + col_idx),
+                    paraPrIDRef="0",
+                    styleIDRef="0"
+                )
+                cell_run = etree.SubElement(cell_p, f'{HP}run', charPrIDRef="0")
+                t = etree.SubElement(cell_run, f'{HP}t')
+                t.text = str(cell_text) if cell_text else ''
+                
+                # 셀 주소
+                cell_addr = etree.SubElement(tc, f'{HP}cellAddr',
+                    colAddr=str(col_idx),
+                    rowAddr=str(row_idx)
+                )
+    
+    # XML 저장
+    tree = etree.ElementTree(root)
+    tree.write(
+        section_file,
+        encoding='utf-8',
+        xml_declaration=True,
+        pretty_print=False,
+        method='xml'
+    )
+
+
+def _create_section_xml_basic(section_file: str, text: str, tables: List[Dict[str, Any]],
+                               paragraphs: List[Dict[str, Any]] = None):
+    """기본 방식으로 section XML 생성 (단락 구조 지원)"""
+    lines = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>']
+    lines.append('<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">')
+    
+    # 단락 구조가 있으면 사용
+    if paragraphs:
+        for para in paragraphs:
+            para_id = para.get('id', hash(str(para)) % 1000000000)
+            alignment = para.get('alignment', 'left')
+            align_map = {'left': '1', 'center': '3', 'right': '2', 'justify': '0'}
+            para_pr_id = align_map.get(alignment, '0')
+            
+            lines.append(f'  <hp:p id="{para_id}" paraPrIDRef="{para_pr_id}" styleIDRef="0">')
+            
+            # 글머리 기호
+            if para.get('bullet'):
+                lines.append('    <hp:run charPrIDRef="0">')
+                lines.append(f'      <hp:t>{_escape_xml(para["bullet"])} </hp:t>')
+                lines.append('    </hp:run>')
+            
+            # runs 처리
+            for run in para.get('runs', []):
+                style_id = run.get('style_id', 0)
+                run_text = run.get('text', '')
+                lines.append(f'    <hp:run charPrIDRef="{style_id}">')
+                lines.append(f'      <hp:t>{_escape_xml(run_text)}</hp:t>')
+                lines.append('    </hp:run>')
+            
+            lines.append('  </hp:p>')
+    elif text:
+        # 줄바꿈 기준으로 단락 분리
+        text_lines = text.split('\n')
+        for idx, line in enumerate(text_lines):
+            if not line.strip():
+                continue
+            lines.append(f'  <hp:p id="{idx + 1000000000}" paraPrIDRef="0" styleIDRef="0">')
+            lines.append('    <hp:run charPrIDRef="0">')
+            lines.append(f'      <hp:t>{_escape_xml(line)}</hp:t>')
+            lines.append('    </hp:run>')
+            lines.append('  </hp:p>')
+    
+    # 표
+    for table_data in tables:
+        rows = table_data.get('rows', [])
+        if not rows:
+            continue
+        
+        lines.append('  <hp:tbl>')
+        for row_data in rows:
+            lines.append('    <hp:tr>')
+            for cell_text in row_data:
+                lines.append('      <hp:tc>')
+                lines.append('        <hp:run charPrIDRef="0">')
+                lines.append(f'          <hp:t>{_escape_xml(str(cell_text) if cell_text else "")}</hp:t>')
+                lines.append('        </hp:run>')
+                lines.append('      </hp:tc>')
+            lines.append('    </hp:tr>')
+        lines.append('  </hp:tbl>')
+    
+    lines.append('</hs:sec>')
+    
+    with open(section_file, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines))
+
+
+def _escape_xml(text: str) -> str:
+    """XML 특수 문자 이스케이프"""
+    return (text
+            .replace('&', '&amp;')
+            .replace('<', '&lt;')
+            .replace('>', '&gt;')
+            .replace('"', '&quot;')
+            .replace("'", '&apos;'))
+
+
 if __name__ == "__main__":
     import sys
     
     if len(sys.argv) < 2:
         print("사용법: python hwpx_parser.py <hwpx파일경로>")
+        print("또는: python hwpx_parser.py convert <hwp파일경로> <출력hwpx경로> [템플릿hwpx경로]")
         sys.exit(1)
     
-    file_path = sys.argv[1]
-    
-    if not is_hwpx_file(file_path):
-        print(f"HWPX 파일이 아닙니다: {file_path}")
-        sys.exit(1)
-    
-    print(f"HWPX 파일 파싱 중: {file_path}")
-    result = parse_hwpx(file_path)
-    
-    if result['success']:
-        print(f"\n텍스트 길이: {len(result['text'])}")
-        print(f"표 개수: {len(result['tables'])}")
+    if sys.argv[1] == 'convert':
+        if len(sys.argv) < 4:
+            print("사용법: python hwpx_parser.py convert <hwp파일경로> <출력hwpx경로> [템플릿hwpx경로]")
+            sys.exit(1)
         
-        for idx, table in enumerate(result['tables']):
-            print(f"\n표 {idx + 1}: {table['row_count']}행 x {table['col_count']}열")
-            for row in table['rows'][:3]:
-                print(f"  {row}")
+        hwp_path = sys.argv[2]
+        output_path = sys.argv[3]
+        template_path = sys.argv[4] if len(sys.argv) > 4 else None
+        
+        success = convert_hwp_to_hwpx(hwp_path, output_path, template_path)
+        sys.exit(0 if success else 1)
     else:
-        print(f"파싱 실패: {result['error']}")
+        file_path = sys.argv[1]
+        
+        if not is_hwpx_file(file_path):
+            print(f"HWPX 파일이 아닙니다: {file_path}")
+            sys.exit(1)
+        
+        print(f"HWPX 파일 파싱 중: {file_path}")
+        result = parse_hwpx(file_path)
+        
+        if result['success']:
+            print(f"\n텍스트 길이: {len(result['text'])}")
+            print(f"표 개수: {len(result['tables'])}")
+            
+            for idx, table in enumerate(result['tables']):
+                print(f"\n표 {idx + 1}: {table['row_count']}행 x {table['col_count']}열")
+                for row in table['rows'][:3]:
+                    print(f"  {row}")
+        else:
+            print(f"파싱 실패: {result['error']}")
 

@@ -397,6 +397,54 @@
 
         .stat-value { font-weight: 700; color: var(--active-primary); }
 
+        /* Format Toolbar */
+        .format-toolbar {
+            gap: 2px !important;
+        }
+        
+        .format-btn {
+            width: 32px !important;
+            height: 32px !important;
+            padding: 0 !important;
+            display: flex !important;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px !important;
+            font-family: Georgia, serif;
+        }
+        
+        .format-btn strong { font-weight: 900; }
+        .format-btn em { font-style: italic; }
+        .format-btn u { text-decoration: underline; }
+        .format-btn s { text-decoration: line-through; }
+        
+        .format-btn.active {
+            background: var(--active-primary) !important;
+            color: white !important;
+        }
+        
+        /* Editable Cell Styles */
+        .editable-cell {
+            padding: 8px 12px;
+            min-height: 1.5em;
+            outline: none;
+        }
+        
+        .editable-cell:focus {
+            background: #fffef0;
+            box-shadow: inset 0 0 0 2px var(--active-primary);
+        }
+        
+        .editable-cell b, .editable-cell strong { font-weight: bold; }
+        .editable-cell i, .editable-cell em { font-style: italic; }
+        .editable-cell u { text-decoration: underline; }
+        .editable-cell s, .editable-cell strike { text-decoration: line-through; }
+        
+        /* Text Alignment */
+        .text-left { text-align: left; }
+        .text-center { text-align: center; }
+        .text-right { text-align: right; }
+
         /* Responsive */
         @media (max-width: 768px) {
             .document-paper { padding: 30px 20px; }
@@ -454,6 +502,7 @@
                     <div class="toolbar-divider"></div>
                     <div class="toolbar-group">
                         <input type="text" class="filename-input" id="hwpOutputFilename" placeholder="파일명">
+                        <button class="toolbar-btn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;" onclick="convertHwpToHwpx()">🔄 HWPX로 변환</button>
                         <button class="toolbar-btn success" onclick="downloadHwpPackage()">📥 ZIP</button>
                         <button class="toolbar-btn" onclick="downloadHwpCsv()">📊 CSV</button>
                         <button class="toolbar-btn" onclick="downloadHwpJson()">📄 JSON</button>
@@ -498,6 +547,34 @@
                         <button class="toolbar-btn primary" onclick="saveHwpxAll()">💾 저장</button>
                     </div>
                     <div class="toolbar-divider"></div>
+                    <!-- 서식 편집 버튼 -->
+                    <div class="toolbar-group format-toolbar">
+                        <button class="toolbar-btn format-btn" onclick="formatText('bold')" title="굵게 (Ctrl+B)">
+                            <strong>B</strong>
+                        </button>
+                        <button class="toolbar-btn format-btn" onclick="formatText('italic')" title="기울임 (Ctrl+I)">
+                            <em>I</em>
+                        </button>
+                        <button class="toolbar-btn format-btn" onclick="formatText('underline')" title="밑줄 (Ctrl+U)">
+                            <u>U</u>
+                        </button>
+                        <button class="toolbar-btn format-btn" onclick="formatText('strikethrough')" title="취소선">
+                            <s>S</s>
+                        </button>
+                    </div>
+                    <div class="toolbar-divider"></div>
+                    <div class="toolbar-group format-toolbar">
+                        <button class="toolbar-btn format-btn" onclick="alignText('left')" title="왼쪽 정렬">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h18v2H3V3zm0 4h12v2H3V7zm0 4h18v2H3v-2zm0 4h12v2H3v-2zm0 4h18v2H3v-2z"/></svg>
+                        </button>
+                        <button class="toolbar-btn format-btn" onclick="alignText('center')" title="가운데 정렬">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h18v2H3V3zm3 4h12v2H6V7zm-3 4h18v2H3v-2zm3 4h12v2H6v-2zm-3 4h18v2H3v-2z"/></svg>
+                        </button>
+                        <button class="toolbar-btn format-btn" onclick="alignText('right')" title="오른쪽 정렬">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h18v2H3V3zm6 4h12v2H9V7zm-6 4h18v2H3v-2zm6 4h12v2H9v-2zm-6 4h18v2H3v-2z"/></svg>
+                        </button>
+                    </div>
+                    <div class="toolbar-divider"></div>
                     <div class="toolbar-group">
                         <input type="text" class="filename-input" id="hwpxOutputFilename" placeholder="파일명">
                         <button class="toolbar-btn success" onclick="downloadHwpxFile()">📥 HWPX 다운로드</button>
@@ -505,7 +582,7 @@
                     </div>
                 </div>
 
-                <div class="document-paper" id="hwpxDocPaper">
+                <div class="document-paper" id="hwpxDocPaper" contenteditable="false">
                     <!-- 문서 내용이 여기에 렌더링됨 -->
                 </div>
             </div>
@@ -794,6 +871,37 @@
             showAlert('JSON 다운로드 완료', 'success');
         }
 
+        async function convertHwpToHwpx() {
+            if (!hwpState.sessionId) {
+                showAlert('먼저 HWP 파일을 업로드해주세요.', 'error');
+                return;
+            }
+            
+            const filename = document.getElementById('hwpOutputFilename').value.trim() || 'converted';
+            showLoading(true);
+            
+            try {
+                const response = await fetch(`/api/convert-hwp-to-hwpx/${hwpState.sessionId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: filename })
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    downloadBlob(blob, filename.endsWith('.hwpx') ? filename : filename + '.hwpx');
+                    showAlert('HWPX 변환 완료! 이제 편집 가능한 HWPX 파일입니다. HWPX 탭에서 열어보세요.', 'success');
+                } else {
+                    const data = await response.json();
+                    showAlert(data.error || '변환 실패', 'error');
+                }
+            } catch (e) {
+                showAlert('변환 실패: ' + e.message, 'error');
+            } finally {
+                showLoading(false);
+            }
+        }
+
         async function downloadHwpxFile() {
             if (!hwpxState.sessionId) return;
             await saveHwpxAll();
@@ -845,6 +953,74 @@
             document.getElementById('hwpxDocView').classList.remove('show');
             document.getElementById('hwpxFileInput').value = '';
         }
+
+        // =========== 서식 편집 기능 ===========
+        
+        // 텍스트 서식 적용 (굵게, 기울임, 밑줄, 취소선)
+        function formatText(command) {
+            const selection = window.getSelection();
+            if (!selection.rangeCount) return;
+            
+            // document.execCommand 사용 (deprecated 되었지만 여전히 작동)
+            document.execCommand(command, false, null);
+            
+            // 버튼 활성화 상태 업데이트
+            updateFormatButtons();
+        }
+        
+        // 텍스트 정렬 적용
+        function alignText(alignment) {
+            const selection = window.getSelection();
+            if (!selection.rangeCount) return;
+            
+            // 현재 셀 또는 부모 요소 찾기
+            let node = selection.anchorNode;
+            while (node && !node.classList?.contains('editable-cell')) {
+                node = node.parentNode;
+            }
+            
+            if (node) {
+                node.classList.remove('text-left', 'text-center', 'text-right');
+                node.classList.add('text-' + alignment);
+            }
+        }
+        
+        // 서식 버튼 활성화 상태 업데이트
+        function updateFormatButtons() {
+            const buttons = document.querySelectorAll('.format-btn');
+            buttons.forEach(btn => {
+                const command = btn.getAttribute('onclick')?.match(/'(\w+)'/)?.[1];
+                if (command && ['bold', 'italic', 'underline', 'strikethrough'].includes(command)) {
+                    if (document.queryCommandState(command)) {
+                        btn.classList.add('active');
+                    } else {
+                        btn.classList.remove('active');
+                    }
+                }
+            });
+        }
+        
+        // 키보드 단축키 지원
+        document.addEventListener('keydown', function(e) {
+            // Ctrl/Cmd + B (굵게)
+            if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+                e.preventDefault();
+                formatText('bold');
+            }
+            // Ctrl/Cmd + I (기울임)
+            if ((e.ctrlKey || e.metaKey) && e.key === 'i') {
+                e.preventDefault();
+                formatText('italic');
+            }
+            // Ctrl/Cmd + U (밑줄)
+            if ((e.ctrlKey || e.metaKey) && e.key === 'u') {
+                e.preventDefault();
+                formatText('underline');
+            }
+        });
+        
+        // 선택 변경 시 버튼 상태 업데이트
+        document.addEventListener('selectionchange', updateFormatButtons);
 
         // Utilities
         function tablesToCsv(tables) {
