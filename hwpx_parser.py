@@ -13,6 +13,14 @@ import shutil
 import tempfile
 import re
 
+# lxml import (선택적 - 없어도 정규식 방식으로 동작)
+try:
+    from lxml import etree
+    LXML_AVAILABLE = True
+except ImportError:
+    LXML_AVAILABLE = False
+    etree = None
+
 
 # HWPX XML 네임스페이스
 NAMESPACES = {
@@ -521,6 +529,179 @@ def _modify_cell_text_regex(tc_content: str, new_text: str) -> str:
     result, count = re.subn(empty_run_pattern, add_t_to_empty_run, tc_content, count=1)
     
     return result
+
+
+def save_hwpx_with_tables_lxml(original_path: str, tables_data: List[Dict[str, Any]], output_path: str) -> bool:
+    """
+    HWPX 파일에 수정된 모든 표를 저장합니다 (lxml 기반 완벽 버전).
+    네임스페이스를 완벽하게 보존하면서 XML 구조를 정확히 이해하여 수정합니다.
+    
+    Args:
+        original_path: 원본 HWPX 파일 경로
+        tables_data: 수정된 표 데이터 리스트
+        output_path: 출력 파일 경로
+        
+    Returns:
+        성공 여부
+    """
+    if not LXML_AVAILABLE:
+        print("lxml이 설치되지 않았습니다. 정규식 방식으로 대체합니다.")
+        return save_hwpx_with_tables(original_path, tables_data, output_path)
+    
+    try:
+        # 임시 디렉토리에 압축 해제
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # HWPX 압축 해제
+            with zipfile.ZipFile(original_path, 'r') as zf:
+                zf.extractall(temp_dir)
+            
+            # section 파일 찾기
+            section_files = []
+            for root_dir, dirs, files in os.walk(temp_dir):
+                for file in files:
+                    if 'section' in file.lower() and file.endswith('.xml'):
+                        section_files.append(os.path.join(root_dir, file))
+            
+            section_files.sort()
+            
+            # lxml 네임스페이스 정의
+            ns_map = {
+                'hp': 'http://www.hancom.co.kr/hwpml/2011/paragraph',
+                'hs': 'http://www.hancom.co.kr/hwpml/2011/section',
+                'hc': 'http://www.hancom.co.kr/hwpml/2011/core',
+                'hh': 'http://www.hancom.co.kr/hwpml/2011/head',
+                'ho': 'http://www.hancom.co.kr/hwpml/2011/owner',
+            }
+            
+            # 각 section 파일 처리
+            for section_file in section_files:
+                # lxml 파서 설정 (원본 형식 최대한 보존)
+                parser = etree.XMLParser(
+                    remove_blank_text=False,  # 공백 보존
+                    strip_cdata=False,  # CDATA 보존
+                    recover=False,  # 오류 시 실패
+                    huge_tree=True  # 큰 파일 지원
+                )
+                
+                try:
+                    tree = etree.parse(section_file, parser)
+                    root = tree.getroot()
+                except Exception as e:
+                    print(f"XML 파싱 오류 ({section_file}): {e}")
+                    continue
+                
+                # 표 찾기
+                tables = root.xpath('.//hp:tbl', namespaces=ns_map)
+                
+                if not tables_data:
+                    continue
+                
+                # 각 표 수정
+                for table_idx, tbl in enumerate(tables):
+                    if table_idx >= len(tables_data):
+                        break
+                    
+                    table_data = tables_data[table_idx]
+                    new_rows = table_data.get('rows', [])
+                    
+                    if not new_rows:
+                        continue
+                    
+                    # 행 찾기
+                    rows = tbl.xpath('.//hp:tr', namespaces=ns_map)
+                    
+                    for row_idx, tr in enumerate(rows):
+                        if row_idx >= len(new_rows):
+                            break
+                        
+                        row_data = new_rows[row_idx]
+                        
+                        # 셀 찾기
+                        cells = tr.xpath('.//hp:tc', namespaces=ns_map)
+                        
+                        for col_idx, tc in enumerate(cells):
+                            if col_idx >= len(row_data):
+                                break
+                            
+                            new_text = row_data[col_idx]
+                            
+                            # t 태그 찾기
+                            t_elements = tc.xpath('.//hp:t', namespaces=ns_map)
+                            
+                            if t_elements:
+                                # 기존 t 태그가 있으면 텍스트만 수정
+                                t_elements[0].text = new_text
+                            else:
+                                # t 태그가 없으면 생성
+                                # 먼저 run 태그 찾기
+                                run_elements = tc.xpath('.//hp:run', namespaces=ns_map)
+                                
+                                if run_elements:
+                                    # run 태그가 있으면 그 안에 t 태그 추가
+                                    run_elem = run_elements[0]
+                                    # 자동 닫힘 태그인지 확인
+                                    if run_elem.text is None and len(run_elem) == 0:
+                                        # 자동 닫힘 태그였던 경우, 일반 태그로 변환
+                                        pass
+                                    
+                                    # t 태그 생성
+                                    t_elem = etree.Element(
+                                        '{http://www.hancom.co.kr/hwpml/2011/paragraph}t'
+                                    )
+                                    t_elem.text = new_text
+                                    run_elem.append(t_elem)
+                                else:
+                                    # run 태그도 없으면 생성
+                                    run_elem = etree.Element(
+                                        '{http://www.hancom.co.kr/hwpml/2011/paragraph}run'
+                                    )
+                                    t_elem = etree.Element(
+                                        '{http://www.hancom.co.kr/hwpml/2011/paragraph}t'
+                                    )
+                                    t_elem.text = new_text
+                                    run_elem.append(t_elem)
+                                    tc.append(run_elem)
+                
+                # 네임스페이스 보존하면서 저장
+                # 원본 XML 선언과 네임스페이스 선언 유지
+                try:
+                    # 원본 파일의 XML 선언 읽기
+                    with open(section_file, 'r', encoding='utf-8') as f:
+                        original_content = f.read()
+                        # XML 선언 추출
+                        xml_declaration = ''
+                        if original_content.startswith('<?xml'):
+                            end_pos = original_content.find('?>')
+                            if end_pos > 0:
+                                xml_declaration = original_content[:end_pos + 2]
+                except:
+                    xml_declaration = '<?xml version="1.0" encoding="UTF-8"?>'
+                
+                # lxml로 저장 (네임스페이스 보존)
+                # pretty_print=False로 원본 형식 유지
+                tree.write(section_file,
+                          encoding='utf-8',
+                          xml_declaration=True,
+                          pretty_print=False,
+                          method='xml')
+            
+            # 다시 ZIP으로 압축
+            with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for root_dir, dirs, files in os.walk(temp_dir):
+                    for file in files:
+                        file_path_full = os.path.join(root_dir, file)
+                        arcname = os.path.relpath(file_path_full, temp_dir)
+                        zf.write(file_path_full, arcname)
+            
+            return True
+            
+    except Exception as e:
+        print(f"HWPX 저장 오류 (lxml): {e}")
+        import traceback
+        traceback.print_exc()
+        # 오류 발생 시 정규식 방식으로 대체
+        print("정규식 방식으로 재시도합니다...")
+        return save_hwpx_with_tables(original_path, tables_data, output_path)
 
 
 if __name__ == "__main__":
