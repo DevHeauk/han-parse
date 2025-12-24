@@ -460,11 +460,11 @@
         <div class="tab-header">
             <button class="tab-btn hwp-tab active" onclick="switchTab('hwp')">
                 📄 HWP 파일
-                <span class="tab-badge">읽기 전용</span>
+                <span class="tab-badge">변환 후 편집</span>
             </button>
             <button class="tab-btn hwpx-tab" onclick="switchTab('hwpx')">
                 📝 HWPX 파일
-                <span class="tab-badge">편집 가능</span>
+                <span class="tab-badge">직접 편집</span>
             </button>
         </div>
 
@@ -474,7 +474,7 @@
             <div class="upload-section" id="hwpUpload">
                 <div class="upload-icon">📁</div>
                 <div class="upload-title">HWP 파일 업로드</div>
-                <div class="upload-subtitle">파일을 드래그 앤 드롭하거나 클릭하여 선택<br><small>읽기 전용 - CSV/JSON으로 추출 가능</small></div>
+                <div class="upload-subtitle">파일을 드래그 앤 드롭하거나 클릭하여 선택<br><small>💡 HWPX로 변환하면 편집 가능!</small></div>
                 <div class="file-input-wrapper">
                     <input type="file" id="hwpFileInput" class="file-input" accept=".hwp,.HWP">
                     <label for="hwpFileInput" class="file-input-label">📂 HWP 파일 선택</label>
@@ -487,22 +487,33 @@
                     <div class="file-badge">
                         📄 <span id="hwpFileName">파일명.hwp</span>
                     </div>
-                    <span class="file-type-badge readonly">읽기 전용</span>
+                    <span class="file-type-badge readonly" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">🔄 변환 후 편집</span>
                     <div class="stats-bar">
                         <div class="stat-item">표 <span class="stat-value" id="hwpTableCount">0</span>개</div>
                         <div class="stat-item">텍스트 <span class="stat-value" id="hwpTextLen">0</span>자</div>
                     </div>
                 </div>
 
+                <!-- 변환 안내 배너 -->
+                <div style="background: linear-gradient(135deg, #667eea22 0%, #764ba222 100%); border: 1px solid #667eea44; border-radius: 8px; padding: 12px 16px; margin-bottom: 15px; display: flex; align-items: center; gap: 12px;">
+                    <span style="font-size: 24px;">💡</span>
+                    <div>
+                        <strong style="color: #667eea;">편집하려면 HWPX로 변환하세요!</strong>
+                        <div style="font-size: 0.85em; color: #666; margin-top: 2px;">HWP는 읽기 전용입니다. 변환 버튼을 눌러 편집 가능한 HWPX 파일로 변환 후 HWPX 탭에서 열어주세요.</div>
+                    </div>
+                </div>
+
                 <div class="toolbar">
                     <div class="toolbar-group">
                         <button class="toolbar-btn" onclick="resetHwp()">🔄 새 파일</button>
-                        <button class="toolbar-btn primary" onclick="saveHwpChanges()">💾 저장</button>
                     </div>
                     <div class="toolbar-divider"></div>
                     <div class="toolbar-group">
                         <input type="text" class="filename-input" id="hwpOutputFilename" placeholder="파일명">
-                        <button class="toolbar-btn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;" onclick="convertHwpToHwpx()">🔄 HWPX로 변환</button>
+                        <button class="toolbar-btn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: bold; padding: 8px 16px;" onclick="convertHwpToHwpx()">✨ HWPX로 변환하여 편집</button>
+                    </div>
+                    <div class="toolbar-divider"></div>
+                    <div class="toolbar-group">
                         <button class="toolbar-btn success" onclick="downloadHwpPackage()">📥 ZIP</button>
                         <button class="toolbar-btn" onclick="downloadHwpCsv()">📊 CSV</button>
                         <button class="toolbar-btn" onclick="downloadHwpJson()">📄 JSON</button>
