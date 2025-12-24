@@ -362,6 +362,85 @@ def download_hwp(session_id):
         return jsonify({'error': f'파일 생성 중 오류: {str(e)}'}), 500
 
 
+@app.route('/api/convert-hwp-to-hwpx/<session_id>', methods=['POST'])
+def convert_hwp_to_hwpx(session_id):
+    """HWP 파일을 HWPX로 변환하여 다운로드"""
+    session_json_path = os.path.join(app.config['TEMP_FOLDER'], f'{session_id}_session.json')
+    json_path = os.path.join(app.config['TEMP_FOLDER'], f'{session_id}.json')
+    text_path = os.path.join(app.config['TEMP_FOLDER'], f'{session_id}_text.txt')
+    
+    if not os.path.exists(session_json_path):
+        return jsonify({'error': '세션을 찾을 수 없습니다'}), 404
+    
+    try:
+        from hwpx_parser import convert_hwp_to_hwpx
+        
+        # 세션 데이터 읽기
+        with open(session_json_path, 'r', encoding='utf-8') as f:
+            session_data = json.load(f)
+        
+        original_path = session_data.get('original_path')
+        original_filename = session_data.get('original_file', 'original.hwp')
+        
+        if not original_path or not os.path.exists(original_path):
+            return jsonify({'error': '원본 파일을 찾을 수 없습니다'}), 404
+        
+        # 파일 타입 확인
+        if session_data.get('file_type') != 'hwp':
+            return jsonify({'error': 'HWP 파일만 변환 가능합니다'}), 400
+        
+        # 템플릿 HWPX 파일 경로 (프로젝트에 있는 경우)
+        template_path = None
+        template_candidates = [
+            os.path.join(os.path.dirname(__file__), '상담 리포트 템플릿.hwpx'),
+            os.path.join(os.path.dirname(__file__), 'template.hwpx'),
+        ]
+        for candidate in template_candidates:
+            if os.path.exists(candidate):
+                template_path = candidate
+                break
+        
+        # HWPX 파일 생성
+        hwpx_filename = original_filename.replace('.hwp', '.hwpx')
+        hwpx_path = os.path.join(app.config['TEMP_FOLDER'], f'{session_id}_converted.hwpx')
+        
+        # 표 데이터 로드
+        tables = []
+        if os.path.exists(json_path):
+            with open(json_path, 'r', encoding='utf-8') as f:
+                tables = json.load(f)
+        
+        # 텍스트 로드
+        text = ''
+        if os.path.exists(text_path):
+            with open(text_path, 'r', encoding='utf-8') as f:
+                text = f.read()
+        
+        # 변환 실행 (이미 파싱된 데이터 사용)
+        success = convert_hwp_to_hwpx(original_path, hwpx_path, template_path, text=text, tables=tables)
+        
+        if not success:
+            return jsonify({'error': 'HWPX 변환에 실패했습니다'}), 500
+        
+        # 다운로드 파일명 가져오기
+        data = request.get_json() or {}
+        download_name = data.get('filename', hwpx_filename)
+        if not download_name.endswith('.hwpx'):
+            download_name += '.hwpx'
+        
+        return send_file(
+            hwpx_path,
+            as_attachment=True,
+            download_name=download_name,
+            mimetype='application/vnd.hancom.hwpml+zip'
+        )
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'변환 중 오류: {str(e)}'}), 500
+
+
 @app.route('/api/text/<session_id>', methods=['GET'])
 def get_text(session_id):
     """세션의 텍스트 데이터 가져오기"""
